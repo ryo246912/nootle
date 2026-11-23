@@ -157,6 +157,32 @@ pub(crate) const BARK_FILES: &[ModelFile] = &[
     SILERO_VAD,
 ];
 
+// ── Whisper large-v3-turbo (Transcription) ────────────────────────────
+// OpenAI's multilingual model as whisper.cpp's GGML files. The weights come
+// first in each list (transcription/whisper.rs loads that one). Each variant
+// has its own folder, since deleting one removes its folder.
+
+const WHISPER_Q5_FILES: &[ModelFile] = &[
+    ModelFile {
+        local_name: "whisper-q5_0/ggml-large-v3-turbo-q5_0.bin",
+        url:
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin",
+        size_bytes: 574_041_195,
+        sha256: "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2",
+    },
+    SILERO_VAD,
+];
+
+const WHISPER_F16_FILES: &[ModelFile] = &[
+    ModelFile {
+        local_name: "whisper-f16/ggml-large-v3-turbo.bin",
+        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin",
+        size_bytes: 1_624_555_275,
+        sha256: "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69",
+    },
+    SILERO_VAD,
+];
+
 const TRANSCRIPTION_VARIANTS: &[ModelVariant] = &[
     ModelVariant {
         id: "int8",
@@ -178,6 +204,20 @@ const TRANSCRIPTION_VARIANTS: &[ModelVariant] = &[
         label: "Underdog Bark 3.0 Plus (≈210 MB) — smallest, English only, macOS 15+",
         files: BARK_FILES,
         total_size_bytes: 208_252_984,
+    },
+    ModelVariant {
+        id: "whisper-q5_0",
+        name: "Whisper large-v3-turbo, quantized",
+        label: "Whisper large-v3-turbo, quantized (≈580 MB) — about 100 languages, including Japanese, macOS only",
+        files: WHISPER_Q5_FILES,
+        total_size_bytes: 576_284_217,
+    },
+    ModelVariant {
+        id: "whisper-f16",
+        name: "Whisper large-v3-turbo, full precision",
+        label: "Whisper large-v3-turbo, full precision (≈1.6 GB) — about 100 languages, a little more accurate, macOS only",
+        files: WHISPER_F16_FILES,
+        total_size_bytes: 1_626_798_297,
     },
 ];
 
@@ -238,7 +278,7 @@ pub const MODEL_REGISTRY: &[ModelDefinition] = &[
         // The id and folder keep Parakeet's name so existing installs keep working.
         id: "parakeet-tdt-0.6b-v3",
         name: "Transcription",
-        description: "Speech-to-text: NVIDIA Parakeet TDT 0.6B v3, or Conway Research's smaller Underdog Bark (CC-BY-4.0)",
+        description: "Speech-to-text: NVIDIA Parakeet TDT 0.6B v3, Conway Research's smaller Underdog Bark (CC-BY-4.0), or OpenAI's multilingual Whisper large-v3-turbo",
         category: ModelCategory::Transcription,
         dir_name: "parakeet-tdt-0.6b-v3",
         variants: TRANSCRIPTION_VARIANTS,
@@ -396,7 +436,16 @@ pub fn top_level_entries(variant: &ModelVariant) -> impl Iterator<Item = &'stati
 
 /// Whether this Mac can run a variant.
 pub fn is_variant_supported(variant: &ModelVariant) -> bool {
-    variant.id != crate::transcription::BARK_VARIANT || crate::transcription::bark_supported()
+    if variant.id == crate::transcription::BARK_VARIANT {
+        crate::transcription::bark_supported()
+    } else if variant
+        .id
+        .starts_with(crate::transcription::WHISPER_VARIANT_PREFIX)
+    {
+        crate::transcription::whisper_supported()
+    } else {
+        true
+    }
 }
 
 /// Puts a variant's files (empty) in `dir`.
@@ -450,12 +499,10 @@ mod tests {
     }
 
     #[test]
-    fn transcription_has_three_variants() {
+    fn transcription_has_five_variants() {
         let model = get_model("parakeet-tdt-0.6b-v3").unwrap();
-        assert_eq!(model.variants.len(), 3);
-        assert_eq!(model.variants[0].id, "int8");
-        assert_eq!(model.variants[1].id, "full");
-        assert_eq!(model.variants[2].id, "bark");
+        let ids: Vec<_> = model.variants.iter().map(|v| v.id).collect();
+        assert_eq!(ids, ["int8", "full", "bark", "whisper-q5_0", "whisper-f16"]);
     }
 
     #[test]
@@ -518,6 +565,60 @@ mod tests {
         assert!(variants_conflict(int8, full));
         assert!(!variants_conflict(int8, bark));
         assert!(!variants_conflict(full, bark));
+    }
+
+    #[test]
+    fn whisper_variants_can_be_installed_and_deleted_independently() {
+        let model = get_model("parakeet-tdt-0.6b-v3").unwrap();
+        let get = |id| get_variant(model.id, id).unwrap().1;
+        let [q5, f16] = [get("whisper-q5_0"), get("whisper-f16")];
+        assert!(!variants_conflict(q5, f16));
+        for variant in [q5, f16] {
+            assert!(!variants_conflict(variant, get("int8")));
+            let mut tops: Vec<_> = top_level_entries(variant).collect();
+            tops.dedup();
+            assert_eq!(
+                tops.len(),
+                2,
+                "its own folder and the shared speech detector"
+            );
+        }
+        let folders: Vec<_> = [q5, f16]
+            .iter()
+            .map(|v| top_level_entries(v).next().unwrap())
+            .collect();
+        assert_ne!(folders[0], folders[1]);
+
+        let dir = tempfile::tempdir().unwrap();
+        install(dir.path(), q5);
+        install(dir.path(), f16);
+        let ids: Vec<_> = installed_variants_in(dir.path(), model)
+            .iter()
+            .map(|v| v.id)
+            .collect();
+        assert_eq!(ids, ["whisper-q5_0", "whisper-f16"]);
+    }
+
+    #[test]
+    fn whisper_is_only_chosen_over_parakeet_when_asked_for() {
+        let dir = tempfile::tempdir().unwrap();
+        let model = get_model("parakeet-tdt-0.6b-v3").unwrap();
+        for id in ["int8", "whisper-q5_0"] {
+            install(dir.path(), get_variant(model.id, id).unwrap().1);
+        }
+        let installed = installed_variants_in(dir.path(), model);
+        let used = |preferred| in_use(&installed, preferred).map(|v| v.id);
+        assert_eq!(used(None), Some("int8"));
+        assert_eq!(used(Some("whisper-q5_0")), Some("whisper-q5_0"));
+    }
+
+    #[test]
+    fn whisper_totals_match_their_files() {
+        for id in ["whisper-q5_0", "whisper-f16"] {
+            let (_, variant) = get_variant("parakeet-tdt-0.6b-v3", id).unwrap();
+            let sum: u64 = variant.files.iter().map(|f| f.size_bytes).sum();
+            assert_eq!(sum, variant.total_size_bytes, "{id}");
+        }
     }
 
     #[test]

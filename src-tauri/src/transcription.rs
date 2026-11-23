@@ -1,5 +1,6 @@
-// Speech-to-text, with one of two models downloaded into the same folder:
-// Parakeet v3 (below) or Bark 3.0 Plus (bark.rs), a smaller fine-tune of it.
+// Speech-to-text, with a model chosen from those downloaded into the same
+// folder: Parakeet v3 (below), Bark 3.0 Plus (bark.rs), a smaller fine-tune of
+// it, or Whisper large-v3-turbo (whisper.rs), which speaks far more languages.
 //
 // Parakeet runs via ONNX Runtime with CoreML EP.
 //
@@ -14,6 +15,7 @@
 mod bark;
 #[cfg(target_os = "macos")]
 mod coreml;
+mod whisper;
 
 use crate::model_registry::{self, ModelVariant};
 use anyhow::{anyhow, Context};
@@ -90,6 +92,7 @@ pub struct TranscriptionEngine {
 enum Model {
     Parakeet(Box<Parakeet>),
     Bark(Box<bark::Bark>),
+    Whisper(Box<whisper::Whisper>),
 }
 
 /// Parakeet v3 ONNX models with CoreML acceleration.
@@ -186,8 +189,11 @@ impl TranscriptionEngine {
 
         // Parakeet installs from before the registry listed every file
         // (the mel preprocessor is optional) have no variant but still load.
-        let model = match Self::variant_in(&model_dir, preferred).map(|v| v.id) {
-            Some(BARK_VARIANT) => Model::Bark(Box::new(bark::Bark::load(&model_dir)?)),
+        let model = match Self::variant_in(&model_dir, preferred) {
+            Some(v) if v.id == BARK_VARIANT => Model::Bark(Box::new(bark::Bark::load(&model_dir)?)),
+            Some(v) if whisper::is_variant(v) => {
+                Model::Whisper(Box::new(whisper::Whisper::load(&model_dir, v)?))
+            }
             _ if matches!(Self::check_status_in(&model_dir), ModelStatus::Ready) => {
                 Model::Parakeet(Box::new(Parakeet::load(model_dir)?))
             }
@@ -214,6 +220,7 @@ impl TranscriptionEngine {
         match &mut self.model {
             Model::Parakeet(m) => m.transcribe(audio, offset_ms),
             Model::Bark(m) => m.transcribe(audio, offset_ms),
+            Model::Whisper(m) => m.transcribe(audio, offset_ms),
         }
     }
 }
@@ -221,7 +228,11 @@ impl TranscriptionEngine {
 /// The registry id of the Bark variant of the transcription model.
 pub const BARK_VARIANT: &str = "bark";
 
+/// What the registry ids of the Whisper variants start with.
+pub const WHISPER_VARIANT_PREFIX: &str = "whisper-";
+
 pub use bark::is_supported as bark_supported;
+pub use whisper::is_supported as whisper_supported;
 
 impl Parakeet {
     fn load(model_dir: PathBuf) -> anyhow::Result<Self> {
