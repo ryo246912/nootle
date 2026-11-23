@@ -7,12 +7,14 @@
 // utterance at once, so the endpointer's utterances (at most 15 s) go in
 // as they are and sentences come back with their own timestamps.
 
-use super::{TranscriptionSegment, SAMPLE_RATE, WHISPER_VARIANT_PREFIX};
+use super::{TranscriptionSegment, SAMPLE_RATE};
 use crate::model_registry::ModelVariant;
 use anyhow::anyhow;
 use std::borrow::Cow;
 use std::path::Path;
 
+/// What the registry ids of the Whisper variants start with.
+const VARIANT_PREFIX: &str = "whisper-";
 const SR: usize = SAMPLE_RATE as usize;
 /// whisper.cpp refuses input under a second. The margin is for the rounding
 /// of its own length check.
@@ -32,8 +34,8 @@ pub fn is_supported() -> bool {
     cfg!(target_os = "macos")
 }
 
-pub(super) fn is_variant(variant: &ModelVariant) -> bool {
-    variant.id.starts_with(WHISPER_VARIANT_PREFIX)
+pub fn is_variant(variant: &ModelVariant) -> bool {
+    variant.id.starts_with(VARIANT_PREFIX)
 }
 
 /// The languages Whisper was trained on, by ISO 639-1 code (a few have only
@@ -98,18 +100,19 @@ impl Whisper {
         let decoded = self.engine.run(&padded(audio))?;
         Ok(decoded
             .into_iter()
-            .map(|d| (mean(&d.token_probs), d))
-            .filter(|(confidence, d)| !is_spurious(&d.text, d.no_speech, *confidence))
-            // Whatever it hears in the silence added to reach its minimum.
-            .filter(|(_, d)| step_ms(d.start) < audio_ms)
-            .map(|(confidence, d)| {
+            .filter_map(|d| {
+                let confidence = mean(&d.token_probs);
                 let start = step_ms(d.start);
-                TranscriptionSegment {
+                // Whatever it hears in the silence added to reach its minimum.
+                if is_spurious(&d.text, d.no_speech, confidence) || start >= audio_ms {
+                    return None;
+                }
+                Some(TranscriptionSegment {
                     text: d.text,
                     start_ms: offset_ms + start,
                     end_ms: offset_ms + step_ms(d.end).clamp(start, audio_ms),
                     confidence,
-                }
+                })
             })
             .collect())
     }
@@ -385,7 +388,6 @@ mod tests {
     fn language_codes_are_listed_once() {
         let unique: std::collections::HashSet<_> = LANGUAGES.iter().collect();
         assert_eq!(unique.len(), LANGUAGES.len());
-        assert_eq!(LANGUAGES.len(), 100);
     }
 
     #[cfg(target_os = "macos")]

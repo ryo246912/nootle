@@ -438,10 +438,7 @@ pub fn top_level_entries(variant: &ModelVariant) -> impl Iterator<Item = &'stati
 pub fn is_variant_supported(variant: &ModelVariant) -> bool {
     if variant.id == crate::transcription::BARK_VARIANT {
         crate::transcription::bark_supported()
-    } else if variant
-        .id
-        .starts_with(crate::transcription::WHISPER_VARIANT_PREFIX)
-    {
+    } else if crate::transcription::is_whisper_variant(variant) {
         crate::transcription::whisper_supported()
     } else {
         true

@@ -40,13 +40,6 @@ const FRAME_MS: f64 = (FRAME_SAMPLES * 1000 / SR) as f64;
 
 /// Whether Bark is downloaded in `dir`. The speech detector it ships with
 /// is optional, as for Parakeet.
-pub(super) fn is_downloaded(dir: &Path) -> bool {
-    crate::model_registry::BARK_FILES
-        .iter()
-        .filter(|f| f.local_name != crate::vad::MODEL_FILE)
-        .all(|f| dir.join(f.local_name).exists())
-}
-
 /// Whether this Mac can run Bark: its Core ML encoder needs macOS 15.
 pub fn is_supported() -> bool {
     Encoder::is_supported()

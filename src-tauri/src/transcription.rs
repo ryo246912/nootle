@@ -164,8 +164,10 @@ impl TranscriptionEngine {
         let decoder_path = dir.join("decoder.onnx");
         let vocab_path = dir.join("vocab.txt");
 
+        // The legacy files are a Parakeet install from before the registry
+        // listed every file; every other model is a registry variant.
         if (encoder_path.exists() && decoder_path.exists() && vocab_path.exists())
-            || bark::is_downloaded(dir)
+            || Self::variant_in(dir, None).is_some()
         {
             ModelStatus::Ready
         } else {
@@ -242,11 +244,8 @@ impl TranscriptionEngine {
 /// The registry id of the Bark variant of the transcription model.
 pub const BARK_VARIANT: &str = "bark";
 
-/// What the registry ids of the Whisper variants start with.
-pub const WHISPER_VARIANT_PREFIX: &str = "whisper-";
-
 pub use bark::is_supported as bark_supported;
-pub use whisper::{is_supported as whisper_supported, LANGUAGES};
+pub use whisper::{is_supported as whisper_supported, is_variant as is_whisper_variant, LANGUAGES};
 
 impl Parakeet {
     fn load(model_dir: PathBuf) -> anyhow::Result<Self> {
@@ -842,7 +841,17 @@ mod tests {
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(path, b"").unwrap();
         }
-        assert!(bark::is_downloaded(tmp.path()));
+        let status = TranscriptionEngine::check_status_in(tmp.path());
+        assert!(matches!(status, ModelStatus::Ready));
+    }
+
+    #[test]
+    fn a_whisper_only_install_is_ready() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (_, variant) = crate::model_registry::get_variant(MODEL_ID, "whisper-q5_0").unwrap();
+        let weights = tmp.path().join(variant.files[0].local_name);
+        std::fs::create_dir_all(weights.parent().unwrap()).unwrap();
+        std::fs::write(weights, b"").unwrap();
         let status = TranscriptionEngine::check_status_in(tmp.path());
         assert!(matches!(status, ModelStatus::Ready));
     }
