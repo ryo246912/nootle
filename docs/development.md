@@ -10,6 +10,8 @@ pnpm install
 pnpm tauri dev
 ```
 
+Whisper transcription is built on macOS from [whisper.cpp](https://github.com/ggml-org/whisper.cpp) through the `whisper-rs` crate, so a macOS build also needs `cmake` and the Xcode command line tools (a C++ compiler and libclang). The first build compiles whisper.cpp with Metal, which adds a few minutes. Linux builds skip it.
+
 `tauri build` refuses to run when an `@tauri-apps/*` npm package and its Rust crate are on different minor versions. The npm packages are pinned with `~` to the minors in `src-tauri/Cargo.lock`, so when you bump a Tauri crate, bump its npm package to the same minor.
 
 ## Integration sign-in

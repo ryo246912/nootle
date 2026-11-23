@@ -1,5 +1,6 @@
-// Speech-to-text, with one of two models downloaded into the same folder:
-// Parakeet v3 (below) or Bark 3.0 Plus (bark.rs), a smaller fine-tune of it.
+// Speech-to-text, with a model chosen from those downloaded into the same
+// folder: Parakeet v3 (below), Bark 3.0 Plus (bark.rs), a smaller fine-tune of
+// it, or Whisper large-v3-turbo (whisper.rs), which speaks far more languages.
 //
 // Parakeet runs via ONNX Runtime with CoreML EP.
 //
@@ -14,7 +15,9 @@
 mod bark;
 #[cfg(target_os = "macos")]
 mod coreml;
+mod whisper;
 
+use crate::model_registry::{self, ModelVariant};
 use anyhow::{anyhow, Context};
 use ndarray::Array2;
 use ort::session::Session;
@@ -28,6 +31,33 @@ use tokio::sync::Mutex;
 
 const SAMPLE_RATE: u32 = 16000;
 const MODEL_DIR_NAME: &str = "parakeet-tdt-0.6b-v3";
+/// The registry entry every speech model variant is listed under.
+pub const MODEL_ID: &str = "parakeet-tdt-0.6b-v3";
+
+/// The setting holding the variant chosen in Settings. Unset: Bark when it's
+/// downloaded, else whichever Parakeet is.
+pub const MODEL_SETTING: &str = "transcription_model";
+
+/// The variant chosen in Settings, if any.
+pub fn chosen_variant(db: &crate::db::Database) -> Option<String> {
+    db.get_setting(MODEL_SETTING)
+        .ok()
+        .flatten()
+        .filter(|id| !id.is_empty())
+}
+
+/// The setting holding the language Whisper should transcribe. Unset, empty or
+/// "auto": it detects the language itself.
+pub const LANGUAGE_SETTING: &str = "transcription_language";
+pub const AUTO_LANGUAGE: &str = "auto";
+
+/// The language chosen in Settings, if one is fixed.
+pub fn chosen_language(db: &crate::db::Database) -> Option<&'static str> {
+    db.get_setting(LANGUAGE_SETTING)
+        .ok()
+        .flatten()
+        .and_then(|code| whisper::language_code(&code))
+}
 
 // Mel spectrogram parameters matching NeMo's AudioToMelSpectrogramPreprocessor
 const N_FFT: usize = 512;
@@ -75,6 +105,7 @@ pub struct TranscriptionEngine {
 enum Model {
     Parakeet(Box<Parakeet>),
     Bark(Box<bark::Bark>),
+    Whisper(Box<whisper::Whisper>),
 }
 
 /// Parakeet v3 ONNX models with CoreML acceleration.
@@ -133,8 +164,10 @@ impl TranscriptionEngine {
         let decoder_path = dir.join("decoder.onnx");
         let vocab_path = dir.join("vocab.txt");
 
+        // The legacy files are a Parakeet install from before the registry
+        // listed every file; every other model is a registry variant.
         if (encoder_path.exists() && decoder_path.exists() && vocab_path.exists())
-            || bark::is_downloaded(dir)
+            || Self::variant_in(dir, None).is_some()
         {
             ModelStatus::Ready
         } else {
@@ -147,31 +180,44 @@ impl TranscriptionEngine {
         Self::check_status_in(&Self::model_dir())
     }
 
-    /// Which variant of the transcription model is downloaded, by registry id.
-    pub fn downloaded_variant() -> &'static str {
-        let dir = Self::model_dir();
-        if bark::is_downloaded(&dir) {
-            BARK_VARIANT
-        } else if dir.join("encoder-model.onnx.data").exists() {
-            "full"
-        } else {
-            "int8"
-        }
+    /// The registry variant that `load` would use: the one chosen in Settings
+    /// when it's on disk, else the best of what is.
+    fn variant_in(dir: &Path, preferred: Option<&str>) -> Option<&'static ModelVariant> {
+        let model = model_registry::get_model(MODEL_ID)?;
+        model_registry::in_use(
+            &model_registry::installed_variants_in(dir, model),
+            preferred,
+        )
+    }
+
+    /// Which variant of the transcription model is in use, by registry id.
+    /// `preferred` is the variant chosen in Settings, if any.
+    pub fn downloaded_variant(preferred: Option<&str>) -> &'static str {
+        Self::variant_in(&Self::model_dir(), preferred).map_or("int8", |v| v.id)
     }
 
     /// Load the transcription engine from pre-downloaded model files.
-    pub fn load() -> anyhow::Result<Self> {
+    /// `preferred` is the variant chosen in Settings; it falls back to
+    /// whichever is downloaded when that one isn't. `language` is only for
+    /// Whisper, the one model that speaks more than a language or two.
+    pub fn load(preferred: Option<&str>, language: Option<&'static str>) -> anyhow::Result<Self> {
         let model_dir = Self::model_dir();
 
-        if !model_dir.exists() {
-            return Err(anyhow!(
-                "Models not found. Please download a transcription model first."
-            ));
-        }
-        let model = if bark::is_downloaded(&model_dir) {
-            Model::Bark(Box::new(bark::Bark::load(&model_dir)?))
-        } else {
-            Model::Parakeet(Box::new(Parakeet::load(model_dir)?))
+        // Parakeet installs from before the registry listed every file
+        // (the mel preprocessor is optional) have no variant but still load.
+        let model = match Self::variant_in(&model_dir, preferred) {
+            Some(v) if v.id == BARK_VARIANT => Model::Bark(Box::new(bark::Bark::load(&model_dir)?)),
+            Some(v) if whisper::is_variant(v) => {
+                Model::Whisper(Box::new(whisper::Whisper::load(&model_dir, v, language)?))
+            }
+            _ if matches!(Self::check_status_in(&model_dir), ModelStatus::Ready) => {
+                Model::Parakeet(Box::new(Parakeet::load(model_dir)?))
+            }
+            _ => {
+                return Err(anyhow!(
+                    "Models not found. Please download a transcription model first."
+                ))
+            }
         };
         Ok(Self { model })
     }
@@ -190,6 +236,7 @@ impl TranscriptionEngine {
         match &mut self.model {
             Model::Parakeet(m) => m.transcribe(audio, offset_ms),
             Model::Bark(m) => m.transcribe(audio, offset_ms),
+            Model::Whisper(m) => m.transcribe(audio, offset_ms),
         }
     }
 }
@@ -198,6 +245,7 @@ impl TranscriptionEngine {
 pub const BARK_VARIANT: &str = "bark";
 
 pub use bark::is_supported as bark_supported;
+pub use whisper::{is_supported as whisper_supported, is_variant as is_whisper_variant, LANGUAGES};
 
 impl Parakeet {
     fn load(model_dir: PathBuf) -> anyhow::Result<Self> {
@@ -759,7 +807,7 @@ pub async fn try_load_engine(engine: &SharedTranscriptionEngine) -> anyhow::Resu
 
     match TranscriptionEngine::check_status() {
         ModelStatus::Ready => {
-            let loaded = TranscriptionEngine::load()?;
+            let loaded = TranscriptionEngine::load(None, None)?;
             *guard = Some(loaded);
             Ok(())
         }
@@ -793,7 +841,17 @@ mod tests {
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(path, b"").unwrap();
         }
-        assert!(bark::is_downloaded(tmp.path()));
+        let status = TranscriptionEngine::check_status_in(tmp.path());
+        assert!(matches!(status, ModelStatus::Ready));
+    }
+
+    #[test]
+    fn a_whisper_only_install_is_ready() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (_, variant) = crate::model_registry::get_variant(MODEL_ID, "whisper-q5_0").unwrap();
+        let weights = tmp.path().join(variant.files[0].local_name);
+        std::fs::create_dir_all(weights.parent().unwrap()).unwrap();
+        std::fs::write(weights, b"").unwrap();
         let status = TranscriptionEngine::check_status_in(tmp.path());
         assert!(matches!(status, ModelStatus::Ready));
     }

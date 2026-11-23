@@ -162,11 +162,20 @@ fn span(audio: &[f32], base: usize, from_ms: u64, to_ms: u64) -> &[f32] {
     &audio[start..end.max(start)]
 }
 
+/// The speech model chosen in Settings, else the best one downloaded.
+fn load_engine(db: &Database) -> Result<TranscriptionEngine> {
+    TranscriptionEngine::load(
+        crate::transcription::chosen_variant(db).as_deref(),
+        crate::transcription::chosen_language(db),
+    )
+    .context("Transcription model failed to load")
+}
+
 /// Builds the transcriber for a new recording: the transcription model
 /// (required), plus speaker identification when its models are downloaded.
 /// `in_call`: a meeting app is already using the mic.
-pub fn live_transcriber(in_call: bool) -> Result<LiveTranscriber> {
-    let engine = TranscriptionEngine::load().context("Transcription model failed to load")?;
+pub fn live_transcriber(db: &Database, in_call: bool) -> Result<LiveTranscriber> {
+    let engine = load_engine(db)?;
     let diarization = match DiarizationEngine::load() {
         Ok(e) => Some(e),
         Err(err) => {
@@ -292,7 +301,7 @@ pub fn transcribe_file(
     mut on_stored: impl FnMut(&[TranscriptSegment]),
 ) -> Result<(u64, u64)> {
     let mut recording = Recording::open(audio_path)?;
-    let engine = TranscriptionEngine::load().context("Transcription model failed to load")?;
+    let engine = load_engine(db)?;
     let mut transcriber = LiveTranscriber::new(engine, SpeakerAttributor::new(None, false));
     db.delete_transcript(meeting_id)?;
     let (mut total_samples, mut count) = (0u64, 0u64);

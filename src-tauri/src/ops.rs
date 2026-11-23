@@ -116,7 +116,34 @@ pub fn editable_settings() -> impl Iterator<Item = &'static str> {
         crate::handoff::NAME_SETTING,
         crate::handoff::URL_SETTING,
         crate::handoff::ICON_SETTING,
+        crate::transcription::MODEL_SETTING,
+        crate::transcription::LANGUAGE_SETTING,
     ])
+}
+
+/// A speech model variant by registry id; "" goes back to automatic.
+fn validate_transcription_model(value: &str) -> Result<()> {
+    if value.is_empty() {
+        return Ok(());
+    }
+    let model = crate::model_registry::get_model(crate::transcription::MODEL_ID)
+        .expect("the transcription model is in the registry");
+    // Only what this Mac can run, as in Settings.
+    let ids: Vec<_> = model
+        .variants
+        .iter()
+        .filter(|v| crate::model_registry::is_variant_supported(v))
+        .map(|v| v.id)
+        .collect();
+    validate_one_of("speech model", value, &ids)
+}
+
+/// "auto" (or "") to detect the language, else a language Whisper knows.
+fn validate_transcription_language(value: &str) -> Result<()> {
+    if value.is_empty() || value == crate::transcription::AUTO_LANGUAGE {
+        return Ok(());
+    }
+    validate_one_of("language", value, crate::transcription::LANGUAGES)
 }
 
 pub fn validate_one_of(what: &str, value: &str, allowed: &[&str]) -> Result<()> {
@@ -183,6 +210,8 @@ pub fn validate_setting(key: &str, value: &str) -> Result<()> {
         handoff::NAME_SETTING => max_chars("name", value, handoff::MAX_NAME_CHARS),
         handoff::ICON_SETTING => max_chars("icon", value, handoff::MAX_ICON_CHARS),
         handoff::URL_SETTING => handoff::validate_url(value),
+        crate::transcription::MODEL_SETTING => validate_transcription_model(value),
+        crate::transcription::LANGUAGE_SETTING => validate_transcription_language(value),
         _ => validate_one_of("value", value, &["true", "false"]),
     }
 }
@@ -1486,6 +1515,28 @@ mod tests {
         assert!(validate_setting(SUMMARIZATION_PROVIDER_SETTING, "anthropic").is_ok());
         assert!(validate_setting(SUMMARIZATION_PROVIDER_SETTING, "").is_ok());
         assert!(validate_setting("theme", "dark").is_err());
+    }
+
+    #[test]
+    fn the_speech_model_must_be_a_registered_variant_or_automatic() {
+        use crate::transcription::MODEL_SETTING;
+        assert!(validate_setting(MODEL_SETTING, "int8").is_ok());
+        // Whisper is only offered where it can run.
+        assert_eq!(
+            validate_setting(MODEL_SETTING, "whisper-q5_0").is_ok(),
+            crate::transcription::whisper_supported()
+        );
+        assert!(validate_setting(MODEL_SETTING, "").is_ok());
+        assert!(validate_setting(MODEL_SETTING, "gpt-4").is_err());
+    }
+
+    #[test]
+    fn the_speech_language_must_be_one_whisper_knows_or_automatic() {
+        use crate::transcription::LANGUAGE_SETTING;
+        assert!(validate_setting(LANGUAGE_SETTING, "ja").is_ok());
+        assert!(validate_setting(LANGUAGE_SETTING, "auto").is_ok());
+        assert!(validate_setting(LANGUAGE_SETTING, "").is_ok());
+        assert!(validate_setting(LANGUAGE_SETTING, "japanese").is_err());
     }
 
     fn db_with_meeting() -> (Database, String) {

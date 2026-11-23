@@ -382,14 +382,15 @@ fn entries_only_used_by(
     entries
 }
 
-/// Get on-disk status for all models in the registry.
-pub fn get_all_model_status() -> Vec<ModelOnDiskStatus> {
+/// Get on-disk status for all models in the registry. `chosen` is the
+/// transcription variant picked in Settings.
+pub fn get_all_model_status(chosen: Option<&str>) -> Vec<ModelOnDiskStatus> {
     model_registry::MODEL_REGISTRY
         .iter()
         .map(|model| {
             let dir = model_registry::model_dir(model);
             let installed = model_registry::installed_variants_in(&dir, model);
-            let variant = model_registry::in_use(&installed);
+            let variant = model_registry::in_use(&installed, chosen);
             let downloadable = model
                 .variants
                 .iter()
@@ -501,6 +502,24 @@ mod tests {
         let installed = model_registry::installed_variants_in(dir.path(), model);
         assert_eq!(installed.len(), 1);
         assert_eq!(installed[0].id, "int8");
+    }
+
+    #[test]
+    fn deleting_one_whisper_variant_keeps_the_other_and_the_speech_detector() {
+        let dir = tempfile::tempdir().unwrap();
+        let model = model_registry::get_model("parakeet-tdt-0.6b-v3").unwrap();
+        let (_, q5) = model_registry::get_variant(model.id, "whisper-q5_0").unwrap();
+        let (_, f16) = model_registry::get_variant(model.id, "whisper-f16").unwrap();
+        install(dir.path(), q5);
+        install(dir.path(), f16);
+
+        delete_variant_files_in(dir.path(), model, q5).unwrap();
+
+        assert!(!dir.path().join("whisper-q5_0").exists());
+        assert!(dir.path().join("whisper-f16").exists());
+        let installed = model_registry::installed_variants_in(dir.path(), model);
+        assert_eq!(installed.len(), 1);
+        assert_eq!(installed[0].id, "whisper-f16");
     }
 
     #[test]

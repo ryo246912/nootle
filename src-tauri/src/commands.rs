@@ -1355,7 +1355,7 @@ fn transcribe_live(
     if let Some(app) = &call_app {
         tracing::info!("Recording a {} call", app.display_name);
     }
-    let mut transcriber = match crate::pipeline::live_transcriber(call_app.is_some()) {
+    let mut transcriber = match crate::pipeline::live_transcriber(db, call_app.is_some()) {
         Ok(t) => {
             let _ = app.emit(
                 "transcription-status",
@@ -2528,11 +2528,20 @@ pub async fn get_available_models() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
-pub async fn get_downloaded_models() -> Result<Vec<model_download::ModelOnDiskStatus>, String> {
+pub async fn get_downloaded_models(
+    db: State<'_, DbState>,
+) -> Result<Vec<model_download::ModelOnDiskStatus>, String> {
+    let chosen = transcription::chosen_variant(&db);
     // Sizing the model folders walks them.
-    tokio::task::spawn_blocking(model_download::get_all_model_status)
+    tokio::task::spawn_blocking(move || model_download::get_all_model_status(chosen.as_deref()))
         .await
         .map_err(|e| e.to_string())
+}
+
+/// The language codes Whisper can be fixed to.
+#[tauri::command]
+pub fn get_transcription_languages() -> &'static [&'static str] {
+    transcription::LANGUAGES
 }
 
 #[tauri::command]

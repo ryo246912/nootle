@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Link as RouterLink, useSearchParams } from "react-router-dom";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -1523,6 +1523,83 @@ function PermissionsCard() {
   );
 }
 
+const AUTO_LANGUAGE = "auto";
+
+/** Which language Whisper transcribes; it applies from the next recording. */
+function TranscriptionLanguage() {
+  const [codes, setCodes] = useState<string[]>([]);
+  const [value, setValue] = useState(AUTO_LANGUAGE);
+  // One save at a time, so the last pick is what ends up stored.
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    invoke<string[]>("get_transcription_languages").then(setCodes).catch(() => {});
+    invoke<string | null>("get_app_setting", { key: "transcription_language" })
+      .then((saved) => setValue(saved || AUTO_LANGUAGE))
+      .catch(() => {});
+  }, []);
+
+  const options = useMemo(() => {
+    let names: Intl.DisplayNames | null = null;
+    try {
+      names = new Intl.DisplayNames(undefined, { type: "language" });
+    } catch {
+      // Falls back to the bare code.
+    }
+    const label = (code: string) => {
+      try {
+        return names?.of(code) ?? code;
+      } catch {
+        return code;
+      }
+    };
+    return codes
+      .map((code) => ({ code, name: label(code) }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [codes]);
+
+  const change = async (next: string) => {
+    const previous = value;
+    setValue(next);
+    setSaving(true);
+    try {
+      await invoke("set_app_setting", { key: "transcription_language", value: next });
+      toast("The language applies from your next recording");
+    } catch (e) {
+      setValue(previous);
+      toast(`Couldn't change the language: ${e}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+      <div className="min-w-0 flex-1 basis-48">
+        <p className="text-xs font-medium">Spoken language</p>
+        <p className="text-xs text-muted-foreground">
+          Fixing the language is more reliable for short sentences than detecting it each time
+        </p>
+      </div>
+      <Select
+        size="sm"
+        containerClassName="w-44 max-w-full"
+        value={value}
+        disabled={saving}
+        onChange={(e) => change(e.target.value)}
+        aria-label="Spoken language"
+      >
+        <option value={AUTO_LANGUAGE}>Detect automatically</option>
+        {options.map(({ code, name }) => (
+          <option key={code} value={code}>
+            {name}
+          </option>
+        ))}
+      </Select>
+    </div>
+  );
+}
+
 function ModelManagementCard() {
   const {
     registry,
@@ -1553,6 +1630,17 @@ function ModelManagementCard() {
     const choice = selectedVariants[model.model_id];
     if (choice && model.downloadable.includes(choice)) return choice;
     return model.downloadable.includes("int8") ? "int8" : model.downloadable[0];
+  };
+
+  // Chosen by hand, so a model downloaded later doesn't take over.
+  const handleUse = async (variantId: string, name: string) => {
+    try {
+      await invoke("set_app_setting", { key: "transcription_model", value: variantId });
+      await refresh();
+      toast(`${name} will transcribe your next recording`);
+    } catch (e) {
+      toast(`Couldn't switch to ${name}: ${e}`);
+    }
   };
 
   const handleDelete = async () => {
@@ -1607,6 +1695,9 @@ function ModelManagementCard() {
                 </div>
                 <p className="text-xs text-muted-foreground">{model.description}</p>
 
+                {model.category === "Transcription" &&
+                  model.variant_id?.startsWith("whisper-") && <TranscriptionLanguage />}
+
                 {model.installed.length > 0 && (
                   <div className="mt-2 flex flex-col gap-1">
                     {model.installed.map((installed) => {
@@ -1614,7 +1705,7 @@ function ModelManagementCard() {
                       return (
                         <div
                           key={installed.variant_id}
-                          className="flex items-center gap-2 rounded-md bg-muted/50 px-2 py-1"
+                          className="flex flex-wrap items-center gap-2 rounded-md bg-muted/50 px-2 py-1"
                         >
                           <span className="text-xs">{name}</span>
                           {model.installed.length > 1 &&
@@ -1626,6 +1717,17 @@ function ModelManagementCard() {
                           <span className="ml-auto text-xs text-muted-foreground">
                             {formatBytes(installed.size_on_disk)}
                           </span>
+                          {model.category === "Transcription" &&
+                            model.installed.length > 1 &&
+                            installed.variant_id !== model.variant_id && (
+                              <Button
+                                variant="outline"
+                                size="xs"
+                                onClick={() => handleUse(installed.variant_id, name)}
+                              >
+                                Use this
+                              </Button>
+                            )}
                           <Button
                             variant="ghost"
                             size="icon-sm"
