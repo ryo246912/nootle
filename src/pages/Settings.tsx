@@ -1555,6 +1555,17 @@ function ModelManagementCard() {
     return model.downloadable.includes("int8") ? "int8" : model.downloadable[0];
   };
 
+  // Chosen by hand, so a model downloaded later doesn't take over.
+  const handleUse = async (variantId: string, name: string) => {
+    try {
+      await invoke("set_app_setting", { key: "transcription_model", value: variantId });
+      await refresh();
+      toast(`${name} will transcribe your next recording`);
+    } catch (e) {
+      toast(`Couldn't switch to ${name}: ${e}`);
+    }
+  };
+
   const handleDelete = async () => {
     if (!pendingDelete) return;
     try {
@@ -1614,7 +1625,7 @@ function ModelManagementCard() {
                       return (
                         <div
                           key={installed.variant_id}
-                          className="flex items-center gap-2 rounded-md bg-muted/50 px-2 py-1"
+                          className="flex flex-wrap items-center gap-2 rounded-md bg-muted/50 px-2 py-1"
                         >
                           <span className="text-xs">{name}</span>
                           {model.installed.length > 1 &&
@@ -1626,6 +1637,17 @@ function ModelManagementCard() {
                           <span className="ml-auto text-xs text-muted-foreground">
                             {formatBytes(installed.size_on_disk)}
                           </span>
+                          {model.category === "Transcription" &&
+                            model.installed.length > 1 &&
+                            installed.variant_id !== model.variant_id && (
+                              <Button
+                                variant="outline"
+                                size="xs"
+                                onClick={() => handleUse(installed.variant_id, name)}
+                              >
+                                Use this
+                              </Button>
+                            )}
                           <Button
                             variant="ghost"
                             size="icon-sm"

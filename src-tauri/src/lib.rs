@@ -328,10 +328,14 @@ pub fn run() {
             ) && !crate::vad::SileroVad::is_available()
             {
                 let handle = app_handle.clone();
-                let variant = crate::transcription::TranscriptionEngine::downloaded_variant();
+                let chosen =
+                    crate::transcription::chosen_variant(&app.state::<Arc<db::Database>>());
+                let variant = crate::transcription::TranscriptionEngine::downloaded_variant(
+                    chosen.as_deref(),
+                );
                 tauri::async_runtime::spawn(async move {
                     if let Some((model, variant)) =
-                        model_registry::get_variant("parakeet-tdt-0.6b-v3", variant)
+                        model_registry::get_variant(crate::transcription::MODEL_ID, variant)
                     {
                         let cancel = tokio_util::sync::CancellationToken::new();
                         if let Err(e) =

@@ -15,6 +15,7 @@ mod bark;
 #[cfg(target_os = "macos")]
 mod coreml;
 
+use crate::model_registry::{self, ModelVariant};
 use anyhow::{anyhow, Context};
 use ndarray::Array2;
 use ort::session::Session;
@@ -28,6 +29,20 @@ use tokio::sync::Mutex;
 
 const SAMPLE_RATE: u32 = 16000;
 const MODEL_DIR_NAME: &str = "parakeet-tdt-0.6b-v3";
+/// The registry entry every speech model variant is listed under.
+pub const MODEL_ID: &str = "parakeet-tdt-0.6b-v3";
+
+/// The setting holding the variant chosen in Settings. Unset: Bark when it's
+/// downloaded, else whichever Parakeet is.
+pub const MODEL_SETTING: &str = "transcription_model";
+
+/// The variant chosen in Settings, if any.
+pub fn chosen_variant(db: &crate::db::Database) -> Option<String> {
+    db.get_setting(MODEL_SETTING)
+        .ok()
+        .flatten()
+        .filter(|id| !id.is_empty())
+}
 
 // Mel spectrogram parameters matching NeMo's AudioToMelSpectrogramPreprocessor
 const N_FFT: usize = 512;
@@ -147,31 +162,40 @@ impl TranscriptionEngine {
         Self::check_status_in(&Self::model_dir())
     }
 
-    /// Which variant of the transcription model is downloaded, by registry id.
-    pub fn downloaded_variant() -> &'static str {
-        let dir = Self::model_dir();
-        if bark::is_downloaded(&dir) {
-            BARK_VARIANT
-        } else if dir.join("encoder-model.onnx.data").exists() {
-            "full"
-        } else {
-            "int8"
-        }
+    /// The registry variant that `load` would use: the one chosen in Settings
+    /// when it's on disk, else the best of what is.
+    fn variant_in(dir: &Path, preferred: Option<&str>) -> Option<&'static ModelVariant> {
+        let model = model_registry::get_model(MODEL_ID)?;
+        model_registry::in_use(
+            &model_registry::installed_variants_in(dir, model),
+            preferred,
+        )
+    }
+
+    /// Which variant of the transcription model is in use, by registry id.
+    /// `preferred` is the variant chosen in Settings, if any.
+    pub fn downloaded_variant(preferred: Option<&str>) -> &'static str {
+        Self::variant_in(&Self::model_dir(), preferred).map_or("int8", |v| v.id)
     }
 
     /// Load the transcription engine from pre-downloaded model files.
-    pub fn load() -> anyhow::Result<Self> {
+    /// `preferred` is the variant chosen in Settings; it falls back to
+    /// whichever is downloaded when that one isn't.
+    pub fn load(preferred: Option<&str>) -> anyhow::Result<Self> {
         let model_dir = Self::model_dir();
 
-        if !model_dir.exists() {
-            return Err(anyhow!(
-                "Models not found. Please download a transcription model first."
-            ));
-        }
-        let model = if bark::is_downloaded(&model_dir) {
-            Model::Bark(Box::new(bark::Bark::load(&model_dir)?))
-        } else {
-            Model::Parakeet(Box::new(Parakeet::load(model_dir)?))
+        // Parakeet installs from before the registry listed every file
+        // (the mel preprocessor is optional) have no variant but still load.
+        let model = match Self::variant_in(&model_dir, preferred).map(|v| v.id) {
+            Some(BARK_VARIANT) => Model::Bark(Box::new(bark::Bark::load(&model_dir)?)),
+            _ if matches!(Self::check_status_in(&model_dir), ModelStatus::Ready) => {
+                Model::Parakeet(Box::new(Parakeet::load(model_dir)?))
+            }
+            _ => {
+                return Err(anyhow!(
+                    "Models not found. Please download a transcription model first."
+                ))
+            }
         };
         Ok(Self { model })
     }
@@ -759,7 +783,7 @@ pub async fn try_load_engine(engine: &SharedTranscriptionEngine) -> anyhow::Resu
 
     match TranscriptionEngine::check_status() {
         ModelStatus::Ready => {
-            let loaded = TranscriptionEngine::load()?;
+            let loaded = TranscriptionEngine::load(None)?;
             *guard = Some(loaded);
             Ok(())
         }

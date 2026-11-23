@@ -289,11 +289,14 @@ pub fn model_dir(model: &ModelDefinition) -> std::path::PathBuf {
     models_root().join(model.dir_name)
 }
 
-/// Check if all files for a variant are present in a given directory.
+/// Check if all files for a variant are present in a given directory. The
+/// speech detector is optional: it joined the downloads after some people had
+/// installed a model, and transcription runs without it.
 fn is_variant_in_dir(dir: &std::path::Path, variant: &ModelVariant) -> bool {
     variant
         .files
         .iter()
+        .filter(|f| f.local_name != crate::vad::MODEL_FILE)
         .all(|f| dir.join(f.local_name).exists())
 }
 
@@ -323,17 +326,19 @@ fn migrate_legacy_files_in(dir: &std::path::Path) {
     }
 }
 
-/// The variant in use, if any.
-pub fn downloaded_variant(model: &ModelDefinition) -> Option<&'static ModelVariant> {
-    in_use(&installed_variants(model))
-}
-
-/// Of the variants on disk, the one transcription loads (Bark before
-/// Parakeet).
-pub fn in_use(installed: &[&'static ModelVariant]) -> Option<&'static ModelVariant> {
-    installed
-        .iter()
-        .find(|v| v.id == crate::transcription::BARK_VARIANT)
+/// Of the variants on disk, the one transcription loads: the one chosen in
+/// Settings, or when that's unset or no longer on disk, Bark before Parakeet.
+pub fn in_use(
+    installed: &[&'static ModelVariant],
+    preferred: Option<&str>,
+) -> Option<&'static ModelVariant> {
+    preferred
+        .and_then(|id| installed.iter().find(|v| v.id == id))
+        .or_else(|| {
+            installed
+                .iter()
+                .find(|v| v.id == crate::transcription::BARK_VARIANT)
+        })
         .or(installed.first())
         .copied()
 }
@@ -477,6 +482,33 @@ mod tests {
             .map(|v| v.id)
             .collect();
         assert_eq!(ids, ["int8", "bark"]);
+    }
+
+    #[test]
+    fn the_chosen_variant_is_used_when_installed_and_bark_otherwise() {
+        let dir = tempfile::tempdir().unwrap();
+        let model = get_model("parakeet-tdt-0.6b-v3").unwrap();
+        for id in ["int8", "bark"] {
+            install(dir.path(), get_variant(model.id, id).unwrap().1);
+        }
+        let installed = installed_variants_in(dir.path(), model);
+        let used = |preferred| in_use(&installed, preferred).map(|v| v.id);
+        assert_eq!(used(None), Some("bark"));
+        assert_eq!(used(Some("int8")), Some("int8"));
+        // A choice that has since been deleted doesn't leave nothing to load.
+        assert_eq!(used(Some("full")), Some("bark"));
+    }
+
+    #[test]
+    fn a_model_downloaded_before_the_speech_detector_still_counts() {
+        let dir = tempfile::tempdir().unwrap();
+        let model = get_model("parakeet-tdt-0.6b-v3").unwrap();
+        let (_, int8) = get_variant(model.id, "int8").unwrap();
+        install(dir.path(), int8);
+        std::fs::remove_file(dir.path().join(crate::vad::MODEL_FILE)).unwrap();
+        let installed = installed_variants_in(dir.path(), model);
+        assert_eq!(installed.len(), 1);
+        assert_eq!(installed[0].id, "int8");
     }
 
     #[test]

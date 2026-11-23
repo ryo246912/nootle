@@ -382,14 +382,15 @@ fn entries_only_used_by(
     entries
 }
 
-/// Get on-disk status for all models in the registry.
-pub fn get_all_model_status() -> Vec<ModelOnDiskStatus> {
+/// Get on-disk status for all models in the registry. `chosen` is the
+/// transcription variant picked in Settings.
+pub fn get_all_model_status(chosen: Option<&str>) -> Vec<ModelOnDiskStatus> {
     model_registry::MODEL_REGISTRY
         .iter()
         .map(|model| {
             let dir = model_registry::model_dir(model);
             let installed = model_registry::installed_variants_in(&dir, model);
-            let variant = model_registry::in_use(&installed);
+            let variant = model_registry::in_use(&installed, chosen);
             let downloadable = model
                 .variants
                 .iter()
