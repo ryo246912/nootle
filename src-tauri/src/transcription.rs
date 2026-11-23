@@ -46,6 +46,19 @@ pub fn chosen_variant(db: &crate::db::Database) -> Option<String> {
         .filter(|id| !id.is_empty())
 }
 
+/// The setting holding the language Whisper should transcribe. Unset, empty or
+/// "auto": it detects the language itself.
+pub const LANGUAGE_SETTING: &str = "transcription_language";
+pub const AUTO_LANGUAGE: &str = "auto";
+
+/// The language chosen in Settings, if one is fixed.
+pub fn chosen_language(db: &crate::db::Database) -> Option<&'static str> {
+    db.get_setting(LANGUAGE_SETTING)
+        .ok()
+        .flatten()
+        .and_then(|code| whisper::language_code(&code))
+}
+
 // Mel spectrogram parameters matching NeMo's AudioToMelSpectrogramPreprocessor
 const N_FFT: usize = 512;
 const HOP_LENGTH: usize = 160; // 10ms at 16kHz
@@ -183,8 +196,9 @@ impl TranscriptionEngine {
 
     /// Load the transcription engine from pre-downloaded model files.
     /// `preferred` is the variant chosen in Settings; it falls back to
-    /// whichever is downloaded when that one isn't.
-    pub fn load(preferred: Option<&str>) -> anyhow::Result<Self> {
+    /// whichever is downloaded when that one isn't. `language` is only for
+    /// Whisper, the one model that speaks more than a language or two.
+    pub fn load(preferred: Option<&str>, language: Option<&'static str>) -> anyhow::Result<Self> {
         let model_dir = Self::model_dir();
 
         // Parakeet installs from before the registry listed every file
@@ -192,7 +206,7 @@ impl TranscriptionEngine {
         let model = match Self::variant_in(&model_dir, preferred) {
             Some(v) if v.id == BARK_VARIANT => Model::Bark(Box::new(bark::Bark::load(&model_dir)?)),
             Some(v) if whisper::is_variant(v) => {
-                Model::Whisper(Box::new(whisper::Whisper::load(&model_dir, v)?))
+                Model::Whisper(Box::new(whisper::Whisper::load(&model_dir, v, language)?))
             }
             _ if matches!(Self::check_status_in(&model_dir), ModelStatus::Ready) => {
                 Model::Parakeet(Box::new(Parakeet::load(model_dir)?))
@@ -232,7 +246,7 @@ pub const BARK_VARIANT: &str = "bark";
 pub const WHISPER_VARIANT_PREFIX: &str = "whisper-";
 
 pub use bark::is_supported as bark_supported;
-pub use whisper::is_supported as whisper_supported;
+pub use whisper::{is_supported as whisper_supported, LANGUAGES};
 
 impl Parakeet {
     fn load(model_dir: PathBuf) -> anyhow::Result<Self> {
@@ -794,7 +808,7 @@ pub async fn try_load_engine(engine: &SharedTranscriptionEngine) -> anyhow::Resu
 
     match TranscriptionEngine::check_status() {
         ModelStatus::Ready => {
-            let loaded = TranscriptionEngine::load(None)?;
+            let loaded = TranscriptionEngine::load(None, None)?;
             *guard = Some(loaded);
             Ok(())
         }

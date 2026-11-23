@@ -36,6 +36,25 @@ pub(super) fn is_variant(variant: &ModelVariant) -> bool {
     variant.id.starts_with(WHISPER_VARIANT_PREFIX)
 }
 
+/// The languages Whisper was trained on, by ISO 639-1 code (a few have only
+/// a three-letter one). Fixing one makes it skip guessing the language, which
+/// is where short utterances go wrong.
+pub const LANGUAGES: &[&str] = &[
+    "en", "zh", "de", "es", "ru", "ko", "fr", "ja", "pt", "tr", "pl", "ca", "nl", "ar", "sv", "it",
+    "id", "hi", "fi", "vi", "he", "uk", "el", "ms", "cs", "ro", "da", "hu", "ta", "no", "th", "ur",
+    "hr", "bg", "lt", "la", "mi", "ml", "cy", "sk", "te", "fa", "lv", "bn", "sr", "az", "sl", "kn",
+    "et", "mk", "br", "eu", "is", "hy", "ne", "mn", "bs", "kk", "sq", "sw", "gl", "mr", "pa", "si",
+    "km", "sn", "yo", "so", "af", "oc", "ka", "be", "tg", "sd", "gu", "am", "yi", "lo", "uz", "fo",
+    "ht", "ps", "tk", "nn", "mt", "sa", "lb", "my", "bo", "tl", "mg", "as", "tt", "haw", "ln",
+    "ha", "ba", "jw", "su", "yue",
+];
+
+/// `code` as one of `LANGUAGES`, which is what lets the engine hold it for
+/// as long as it lives.
+pub fn language_code(code: &str) -> Option<&'static str> {
+    LANGUAGES.iter().copied().find(|&known| known == code)
+}
+
 /// One segment as whisper.cpp reports it.
 struct Decoded {
     text: String,
@@ -53,13 +72,19 @@ pub(super) struct Whisper {
 
 impl Whisper {
     /// `variant`'s first file is its weights; the speech detector follows.
-    pub(super) fn load(dir: &Path, variant: &ModelVariant) -> anyhow::Result<Self> {
+    /// `language` is a code from `LANGUAGES`; `None` has it work the language
+    /// out for each utterance.
+    pub(super) fn load(
+        dir: &Path,
+        variant: &ModelVariant,
+        language: Option<&'static str>,
+    ) -> anyhow::Result<Self> {
         let weights = variant
             .files
             .first()
             .ok_or_else(|| anyhow!("Whisper variant {} lists no weights", variant.id))?;
         Ok(Self {
-            engine: engine::Engine::load(&dir.join(weights.local_name))?,
+            engine: engine::Engine::load(&dir.join(weights.local_name), language)?,
         })
     }
 
@@ -186,7 +211,7 @@ mod engine {
     }
 
     impl Engine {
-        pub(super) fn load(weights: &Path) -> anyhow::Result<Self> {
+        pub(super) fn load(weights: &Path, language: Option<&'static str>) -> anyhow::Result<Self> {
             // Without this, whisper.cpp writes its log to stderr.
             whisper_rs::install_logging_hooks();
             let context =
@@ -202,6 +227,9 @@ mod engine {
             // hallucination in one spread to the next.
             params.set_no_context(true);
             params.set_translate(false);
+            // Left unset it detects the language. `set_detect_language` is not
+            // that: it stops after detecting and returns no text.
+            params.set_language(language);
             params.set_suppress_blank(true);
             params.set_suppress_nst(true);
             // Retrying a doubtful utterance at higher temperatures can multiply
@@ -259,7 +287,10 @@ mod engine {
     pub(super) enum Engine {}
 
     impl Engine {
-        pub(super) fn load(_weights: &Path) -> anyhow::Result<Self> {
+        pub(super) fn load(
+            _weights: &Path,
+            _language: Option<&'static str>,
+        ) -> anyhow::Result<Self> {
             Err(anyhow!("Whisper transcription needs macOS"))
         }
 
@@ -339,6 +370,33 @@ mod tests {
         assert!(!is_stuck_in_a_loop("はいはい、そうですね。"));
         assert!(!is_stuck_in_a_loop("It was a very, very good day."));
         assert!(!is_stuck_in_a_loop("うーーーん"));
+    }
+
+    #[test]
+    fn only_languages_whisper_knows_are_accepted() {
+        assert_eq!(language_code("ja"), Some("ja"));
+        assert_eq!(language_code("haw"), Some("haw"));
+        assert_eq!(language_code("auto"), None);
+        assert_eq!(language_code(""), None);
+        assert_eq!(language_code("xx"), None);
+    }
+
+    #[test]
+    fn language_codes_are_listed_once() {
+        let unique: std::collections::HashSet<_> = LANGUAGES.iter().collect();
+        assert_eq!(unique.len(), LANGUAGES.len());
+        assert_eq!(LANGUAGES.len(), 100);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn whisper_cpp_knows_every_listed_language() {
+        for code in LANGUAGES {
+            assert!(
+                whisper_rs::get_lang_id(code).is_some(),
+                "whisper.cpp doesn't know {code}"
+            );
+        }
     }
 
     #[test]

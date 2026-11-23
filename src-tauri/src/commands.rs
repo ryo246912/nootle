@@ -2538,6 +2538,12 @@ pub async fn get_downloaded_models(
         .map_err(|e| e.to_string())
 }
 
+/// The language codes Whisper can be fixed to.
+#[tauri::command]
+pub fn get_transcription_languages() -> &'static [&'static str] {
+    transcription::LANGUAGES
+}
+
 #[tauri::command]
 pub async fn download_model(
     app: tauri::AppHandle,

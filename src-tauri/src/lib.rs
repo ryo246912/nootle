@@ -523,6 +523,7 @@ pub fn run() {
             commands::set_linear_setting,
             commands::get_available_models,
             commands::get_downloaded_models,
+            commands::get_transcription_languages,
             commands::download_model,
             commands::cancel_download,
             commands::delete_model,

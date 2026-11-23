@@ -117,6 +117,7 @@ pub fn editable_settings() -> impl Iterator<Item = &'static str> {
         crate::handoff::URL_SETTING,
         crate::handoff::ICON_SETTING,
         crate::transcription::MODEL_SETTING,
+        crate::transcription::LANGUAGE_SETTING,
     ])
 }
 
@@ -129,6 +130,14 @@ fn validate_transcription_model(value: &str) -> Result<()> {
         .expect("the transcription model is in the registry");
     let ids: Vec<_> = model.variants.iter().map(|v| v.id).collect();
     validate_one_of("speech model", value, &ids)
+}
+
+/// "auto" (or "") to detect the language, else a language Whisper knows.
+fn validate_transcription_language(value: &str) -> Result<()> {
+    if value.is_empty() || value == crate::transcription::AUTO_LANGUAGE {
+        return Ok(());
+    }
+    validate_one_of("language", value, crate::transcription::LANGUAGES)
 }
 
 pub fn validate_one_of(what: &str, value: &str, allowed: &[&str]) -> Result<()> {
@@ -196,6 +205,7 @@ pub fn validate_setting(key: &str, value: &str) -> Result<()> {
         handoff::ICON_SETTING => max_chars("icon", value, handoff::MAX_ICON_CHARS),
         handoff::URL_SETTING => handoff::validate_url(value),
         crate::transcription::MODEL_SETTING => validate_transcription_model(value),
+        crate::transcription::LANGUAGE_SETTING => validate_transcription_language(value),
         _ => validate_one_of("value", value, &["true", "false"]),
     }
 }
@@ -1507,6 +1517,15 @@ mod tests {
         assert!(validate_setting(MODEL_SETTING, "bark").is_ok());
         assert!(validate_setting(MODEL_SETTING, "").is_ok());
         assert!(validate_setting(MODEL_SETTING, "gpt-4").is_err());
+    }
+
+    #[test]
+    fn the_speech_language_must_be_one_whisper_knows_or_automatic() {
+        use crate::transcription::LANGUAGE_SETTING;
+        assert!(validate_setting(LANGUAGE_SETTING, "ja").is_ok());
+        assert!(validate_setting(LANGUAGE_SETTING, "auto").is_ok());
+        assert!(validate_setting(LANGUAGE_SETTING, "").is_ok());
+        assert!(validate_setting(LANGUAGE_SETTING, "japanese").is_err());
     }
 
     fn db_with_meeting() -> (Database, String) {

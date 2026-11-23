@@ -164,8 +164,11 @@ fn span(audio: &[f32], base: usize, from_ms: u64, to_ms: u64) -> &[f32] {
 
 /// The speech model chosen in Settings, else the best one downloaded.
 fn load_engine(db: &Database) -> Result<TranscriptionEngine> {
-    TranscriptionEngine::load(crate::transcription::chosen_variant(db).as_deref())
-        .context("Transcription model failed to load")
+    TranscriptionEngine::load(
+        crate::transcription::chosen_variant(db).as_deref(),
+        crate::transcription::chosen_language(db),
+    )
+    .context("Transcription model failed to load")
 }
 
 /// Builds the transcriber for a new recording: the transcription model
