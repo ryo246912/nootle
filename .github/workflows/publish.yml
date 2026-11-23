@@ -45,9 +45,16 @@ jobs:
     timeout-minutes: 45
     outputs:
       tag: ${{ steps.version.outputs.tag }}
+    env:
+      # Forks rarely have an Apple Developer account, so signing and
+      # notarization switch on only when their secrets exist. Without them the
+      # app is ad-hoc signed (see docs/fork.md for what that costs).
+      HAS_SIGNING_CERT: ${{ secrets.APPLE_CERTIFICATE != '' }}
+      HAS_NOTARIZATION: ${{ secrets.APPLE_ID != '' && secrets.APPLE_PASSWORD != '' && secrets.APPLE_TEAM_ID != '' }}
     steps:
       # Fails in seconds, not after the ~10 minute build, when notarization would.
       - name: Check Apple notarization access
+        if: env.HAS_NOTARIZATION == 'true'
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
@@ -74,6 +81,19 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 0
+
+      # The updater key is needed even without Apple credentials, and a
+      # release whose updater still points at another repo would hand its
+      # users that repo's builds.
+      - name: Check updater signing config
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error title=Updater signing key missing::Run scripts/fork/setup-updater-key.sh, or add the TAURI_SIGNING_PRIVATE_KEY secret yourself."
+            exit 1
+          fi
+          node scripts/fork/check-updater-config.mjs
 
       - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
         with:
@@ -145,6 +165,7 @@ jobs:
         run: pnpm install
 
       - name: Import Apple Developer Certificate
+        if: env.HAS_SIGNING_CERT == 'true'
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -161,17 +182,40 @@ jobs:
             -s -k "$KEYCHAIN_PASSWORD" build.keychain
           rm certificate.p12
 
+      # Exported only when set: Tauri treats an empty APPLE_* variable as
+      # present and would try to sign or notarize with credentials it lacks.
+      # Ad-hoc ("-") is the fallback identity, so the app still carries a
+      # signature Apple Silicon will run.
+      - name: Configure macOS signing
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          export_secret() {
+            { echo "$1<<EOF_$1"; echo "${!1}"; echo "EOF_$1"; } >> "$GITHUB_ENV"
+          }
+          if [ "$HAS_SIGNING_CERT" = true ]; then
+            for v in APPLE_SIGNING_IDENTITY APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD; do
+              export_secret "$v"
+            done
+          else
+            echo "APPLE_SIGNING_IDENTITY=-" >> "$GITHUB_ENV"
+          fi
+          if [ "$HAS_NOTARIZATION" = true ]; then
+            for v in APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+              export_secret "$v"
+            done
+          fi
+
       - uses: tauri-apps/tauri-action@73fb865345c54760d875b94642314f8c0c894afa # v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           # Where opt-in crash reports go, compiled in; unset builds send none.
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
         with:
@@ -199,6 +243,18 @@ jobs:
       GH_REPO: ${{ github.repository }}
       TAG: ${{ needs.build.outputs.tag }}
     steps:
+      # Uploaded before publishing so the checksum is there from the first
+      # moment the release is visible. The cask reuses the same value.
+      - name: Generate DMG checksum
+        run: |
+          VERSION="${TAG#v}"
+          DMG="Nootle_${VERSION}_aarch64.dmg"
+          DIR="$RUNNER_TEMP/dmg"
+          gh release download "$TAG" --pattern "$DMG" --dir "$DIR"
+          (cd "$DIR" && sha256sum "$DMG" > "$DMG.sha256" && cat "$DMG.sha256")
+          gh release upload "$TAG" "$DIR/$DMG.sha256" --clobber
+          echo "DMG_SHA256=$(cut -d' ' -f1 "$DIR/$DMG.sha256")" >> "$GITHUB_ENV"
+
       - name: Verify updater assets and publish
         run: |
           ASSETS=$(gh release view "$TAG" --json assets --jq '.assets[].name')
@@ -222,14 +278,12 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           VERSION="${TAG#v}"
-          gh release download "$TAG" --pattern "Nootle_${VERSION}_aarch64.dmg" --dir /tmp/dmg
-          SHA=$(sha256sum "/tmp/dmg/Nootle_${VERSION}_aarch64.dmg" | cut -d' ' -f1)
           for attempt in 1 2 3; do
             git fetch origin main
             git reset --hard origin/main
             git-cliff --output CHANGELOG.md
             sed -i -e "s/^  version \".*\"/  version \"$VERSION\"/" \
-                   -e "s/^  sha256 \".*\"/  sha256 \"$SHA\"/" Casks/nootle.rb
+                   -e "s/^  sha256 \".*\"/  sha256 \"$DMG_SHA256\"/" Casks/nootle.rb
             git add CHANGELOG.md Casks/nootle.rb
             if git diff --cached --quiet; then
               echo "CHANGELOG.md and cask already up to date"
