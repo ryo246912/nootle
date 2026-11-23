@@ -11,13 +11,13 @@
 </p>
 
 <p align="center">
-  <code>brew tap michellemayes/nootle https://github.com/michellemayes/nootle && brew install --cask nootle</code>
+  <code>brew tap ryo246912/nootle https://github.com/ryo246912/nootle && brew install --cask nootle</code>
 </p>
 
 <p align="center">
-  <a href="https://github.com/michellemayes/nootle/releases"><img src="https://img.shields.io/github/v/release/michellemayes/nootle?style=flat-square&color=72937A" alt="Release" /></a>
-  <a href="https://github.com/michellemayes/nootle/actions"><img src="https://img.shields.io/github/actions/workflow/status/michellemayes/nootle/ci.yml?style=flat-square&label=CI" alt="CI" /></a>
-  <a href="https://github.com/michellemayes/nootle/blob/main/LICENSE"><img src="https://img.shields.io/github/license/michellemayes/nootle?style=flat-square&color=D9B78B" alt="License" /></a>
+  <a href="https://github.com/ryo246912/nootle/releases"><img src="https://img.shields.io/github/v/release/ryo246912/nootle?style=flat-square&color=72937A" alt="Release" /></a>
+  <a href="https://github.com/ryo246912/nootle/actions"><img src="https://img.shields.io/github/actions/workflow/status/ryo246912/nootle/ci.yml?style=flat-square&label=CI" alt="CI" /></a>
+  <a href="https://github.com/ryo246912/nootle/blob/main/LICENSE"><img src="https://img.shields.io/github/license/ryo246912/nootle?style=flat-square&color=D9B78B" alt="License" /></a>
   <img src="https://img.shields.io/badge/platform-macOS%2014%2B%20(Apple%20Silicon%20M1%E2%80%93M5)-CC765B?style=flat-square" alt="macOS 14+ (Apple Silicon M1–M5)" />
 </p>
 
@@ -77,12 +77,24 @@ Competitor details are as of October 2026 and change often; check their sites.
 
 ## Install
 
+This is a fork of [michellemayes/nootle](https://github.com/michellemayes/nootle). Its releases, Homebrew tap and in-app updates all come from this repository, never from upstream. [docs/fork.md](docs/fork.md) explains how it differs and how it is released.
+
 ```bash
-brew tap michellemayes/nootle https://github.com/michellemayes/nootle
+brew tap ryo246912/nootle https://github.com/ryo246912/nootle
 brew install --cask nootle
 ```
 
-Or download the latest `.dmg` from [Releases](https://github.com/michellemayes/nootle/releases). Nootle needs an Apple Silicon Mac (M1–M5) on macOS 14 or later. It updates itself from inside the app.
+With [mise](https://mise.jdx.dev), declare the tap and the cask in your config, then run `mise bootstrap packages apply`:
+
+```toml
+[bootstrap.brew.taps]
+"ryo246912/nootle" = "https://github.com/ryo246912/nootle"
+
+[bootstrap.packages]
+"brew-cask:ryo246912/nootle/nootle" = "latest"
+```
+
+Or download the latest `.dmg` from [Releases](https://github.com/ryo246912/nootle/releases); each one has a `.sha256` file beside it. Nootle needs an Apple Silicon Mac (M1–M5) on macOS 14 or later. It updates itself from inside the app.
 
 On first launch it asks for **Microphone**, **Screen Recording** (for system audio and Snapshots), and optionally **Calendar** (to name recordings after events).
 
