@@ -148,7 +148,8 @@ fn chunks(call: &golden::Call) -> Vec<nootle_app_lib::audio::AudioChunk> {
 #[ignore = "needs the transcription model downloaded"]
 fn live_transcription_keeps_whole_sentences() {
     let call = golden::call();
-    let mut transcriber = nootle_app_lib::pipeline::live_transcriber(true).expect("models");
+    let db = nootle_app_lib::db::Database::new_in_memory().expect("db");
+    let mut transcriber = nootle_app_lib::pipeline::live_transcriber(&db, true).expect("models");
     let started = std::time::Instant::now();
     let mut sentences = Vec::new();
     for chunk in chunks(&call) {
