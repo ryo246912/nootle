@@ -565,7 +565,7 @@ mod tests {
     }
 
     #[test]
-    fn whisper_variants_can_be_installed_and_deleted_independently() {
+    fn whisper_variants_install_side_by_side() {
         let model = get_model("parakeet-tdt-0.6b-v3").unwrap();
         let get = |id| get_variant(model.id, id).unwrap().1;
         let [q5, f16] = [get("whisper-q5_0"), get("whisper-f16")];

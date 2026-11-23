@@ -1529,6 +1529,8 @@ const AUTO_LANGUAGE = "auto";
 function TranscriptionLanguage() {
   const [codes, setCodes] = useState<string[]>([]);
   const [value, setValue] = useState(AUTO_LANGUAGE);
+  // One save at a time, so the last pick is what ends up stored.
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     invoke<string[]>("get_transcription_languages").then(setCodes).catch(() => {});
@@ -1559,12 +1561,15 @@ function TranscriptionLanguage() {
   const change = async (next: string) => {
     const previous = value;
     setValue(next);
+    setSaving(true);
     try {
       await invoke("set_app_setting", { key: "transcription_language", value: next });
       toast("The language applies from your next recording");
     } catch (e) {
       setValue(previous);
       toast(`Couldn't change the language: ${e}`);
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -1580,6 +1585,7 @@ function TranscriptionLanguage() {
         size="sm"
         containerClassName="w-44 max-w-full"
         value={value}
+        disabled={saving}
         onChange={(e) => change(e.target.value)}
         aria-label="Spoken language"
       >
@@ -1690,9 +1696,7 @@ function ModelManagementCard() {
                 <p className="text-xs text-muted-foreground">{model.description}</p>
 
                 {model.category === "Transcription" &&
-                  model.installed.some((i) => i.variant_id.startsWith("whisper-")) && (
-                    <TranscriptionLanguage />
-                  )}
+                  model.variant_id?.startsWith("whisper-") && <TranscriptionLanguage />}
 
                 {model.installed.length > 0 && (
                   <div className="mt-2 flex flex-col gap-1">

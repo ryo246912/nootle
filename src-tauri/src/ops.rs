@@ -128,7 +128,13 @@ fn validate_transcription_model(value: &str) -> Result<()> {
     }
     let model = crate::model_registry::get_model(crate::transcription::MODEL_ID)
         .expect("the transcription model is in the registry");
-    let ids: Vec<_> = model.variants.iter().map(|v| v.id).collect();
+    // Only what this Mac can run, as in Settings.
+    let ids: Vec<_> = model
+        .variants
+        .iter()
+        .filter(|v| crate::model_registry::is_variant_supported(v))
+        .map(|v| v.id)
+        .collect();
     validate_one_of("speech model", value, &ids)
 }
 
@@ -1514,7 +1520,12 @@ mod tests {
     #[test]
     fn the_speech_model_must_be_a_registered_variant_or_automatic() {
         use crate::transcription::MODEL_SETTING;
-        assert!(validate_setting(MODEL_SETTING, "bark").is_ok());
+        assert!(validate_setting(MODEL_SETTING, "int8").is_ok());
+        // Whisper is only offered where it can run.
+        assert_eq!(
+            validate_setting(MODEL_SETTING, "whisper-q5_0").is_ok(),
+            crate::transcription::whisper_supported()
+        );
         assert!(validate_setting(MODEL_SETTING, "").is_ok());
         assert!(validate_setting(MODEL_SETTING, "gpt-4").is_err());
     }
